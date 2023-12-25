@@ -228,6 +228,7 @@ class Door(WorldObj):
             if isinstance(env.carrying, Key) and env.carrying.color == self.color:
                 self.is_locked = False
                 self.is_open = True
+                env.carrying = None
                 return True
             return False
 

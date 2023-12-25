@@ -28,22 +28,22 @@ class ReplayMemory(object):
     def __len__(self):
         return len(self.memory)
 
-class OptionNet(nn.Module):
-    def __init__(self, input_channels, output_dim):
-        super(OptionNet, self).__init__()
-        self.conv1 = nn.Conv2d(input_channels, 16, 3)  
-        self.fc1 = nn.Linear(16 * 3 * 3, 64)  
-        self.fc2 = nn.Linear(64, output_dim)
+# class OptionNet(nn.Module):
+#     def __init__(self, input_channels, output_dim):
+#         super(OptionNet, self).__init__()
+#         self.conv1 = nn.Conv2d(input_channels, 16, 3)  
+#         self.fc1 = nn.Linear(16 * 3 * 3, 64)  
+#         self.fc2 = nn.Linear(64, output_dim)
 
-    def forward(self, x, mask):
-        x = x.permute(0, 3, 1, 2)
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2)  # 使用2x2的池化核
-        x = x.reshape(-1, 16 * 3 * 3)  # 将特征张量展平
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        x -= (1 - mask) * 1e8
-        return x
+#     def forward(self, x, mask):
+#         x = x.permute(0, 3, 1, 2)
+#         x = F.relu(self.conv1(x))
+#         x = F.max_pool2d(x, 2)  # 使用2x2的池化核
+#         x = x.reshape(-1, 16 * 3 * 3)  # 将特征张量展平
+#         x = F.relu(self.fc1(x))
+#         x = self.fc2(x)
+#         x -= (1 - mask) * 1e8
+#         return x
 
 class ActionNet(nn.Module):
     def __init__(self, input_channels, output_dim, extra_option_dim):
@@ -65,14 +65,30 @@ class ActionNet(nn.Module):
         x -= (1 - mask) * 1e8
         return x
 
+class FixOption():
+    def __init__(self, agent, n_options = 3):
+        self.n_options = n_options
+        self.agent = agent
+
+    def get_option(self, n_key, n_door_lock):
+        #open the door
+        if isinstance(self.agent.env.carrying, Key) and n_door_lock > 0:
+            return 1
+        
+        elif n_key > 0:
+            return 0
+        
+        else:
+            return 2
+
 class AIAgent:
     def __init__(self, env, state_channel, action_dim, option_dim, eps_action = 1, eps_option = 1, lr=0.001, gamma=0.99, capacity=10000, batch_size=32):
-        self.option_network = OptionNet(state_channel, option_dim)
-        self.option_target_network = OptionNet(state_channel, option_dim)
+        # self.option_network = OptionNet(state_channel, option_dim)
+        # self.option_target_network = OptionNet(state_channel, option_dim)
         self.action_network = ActionNet(state_channel, action_dim, option_dim)
         self.action_target_network = ActionNet(state_channel, action_dim, option_dim)
         self.action_optimizer = optim.Adam(self.action_network.parameters(), lr=lr)
-        self.option_optimizer = optim.Adam(self.option_network.parameters(), lr=lr)
+        # self.option_optimizer = optim.Adam(self.option_network.parameters(), lr=lr)
         self.option_dim = option_dim
         self.action_dim = action_dim
         self.gamma = gamma
@@ -120,48 +136,48 @@ class AIAgent:
         self.action_optimizer.step()
         return loss_action, gradient_norm
 
-    def train_option(self):
-        if len(self.memory_option) < self.batch_size:
-            return None, None
-        transitions = self.memory_option.sample(self.batch_size)
-        batch = Transition_option(*zip(*transitions))
-        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.end_state)), dtype=torch.bool)
-        non_final_next_states = torch.stack([s for s in batch.end_state if s is not None])
-        state_batch = torch.stack(batch.start_state)
-        reward_batch = torch.tensor(batch.reward, dtype=torch.float32)
-        mask = torch.stack(batch.mask)
+    # def train_option(self):
+    #     if len(self.memory_option) < self.batch_size:
+    #         return None, None
+    #     transitions = self.memory_option.sample(self.batch_size)
+    #     batch = Transition_option(*zip(*transitions))
+    #     non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.end_state)), dtype=torch.bool)
+    #     non_final_next_states = torch.stack([s for s in batch.end_state if s is not None])
+    #     state_batch = torch.stack(batch.start_state)
+    #     reward_batch = torch.tensor(batch.reward, dtype=torch.float32)
+    #     mask = torch.stack(batch.mask)
 
-        option_values = self.option_network(state_batch, mask)
-        next_option_values = torch.zeros(self.batch_size)
-        next_option_values[non_final_mask] = self.option_target_network(non_final_next_states, mask).max(1)[0].detach()
-        expected_option_values = (next_option_values * self.gamma) + reward_batch
-        loss = nn.MSELoss()(option_values, expected_option_values.unsqueeze(1))
-        loss_option = loss
-        self.option_optimizer.zero_grad()
-        loss.backward()
+    #     option_values = self.option_network(state_batch, mask)
+    #     next_option_values = torch.zeros(self.batch_size)
+    #     next_option_values[non_final_mask] = self.option_target_network(non_final_next_states, mask).max(1)[0].detach()
+    #     expected_option_values = (next_option_values * self.gamma) + reward_batch
+    #     loss = nn.MSELoss()(option_values, expected_option_values.unsqueeze(1))
+    #     loss_option = loss
+    #     self.option_optimizer.zero_grad()
+    #     loss.backward()
 
-        gradients = []
-        for param in self.option_network.parameters():
-            if param.grad is not None:
-                gradients.append(param.grad.view(-1))
-        gradients = torch.cat(gradients)
-        gradient_norm = torch.norm(gradients, 2)  # 2表示L2范数
-        self.option_optimizer.step()
-        print("loss_option", loss_option)
-        print("gradient_norm", gradient_norm)
-        return loss_option, gradient_norm
+    #     gradients = []
+    #     for param in self.option_network.parameters():
+    #         if param.grad is not None:
+    #             gradients.append(param.grad.view(-1))
+    #     gradients = torch.cat(gradients)
+    #     gradient_norm = torch.norm(gradients, 2)  # 2表示L2范数
+    #     self.option_optimizer.step()
+    #     print("loss_option", loss_option)
+    #     print("gradient_norm", gradient_norm)
+    #     return loss_option, gradient_norm
 
     def store_action_experience(self, state, option, action, next_state, reward, done, legal_action):
         self.memory_action.push(state, option, action, next_state, reward, done, legal_action)
 
-    def store_option_experience(self, start_state, option, step_length, end_state, reward, mask):
-        self.memory_option.push(start_state, option, step_length, end_state, reward, mask)
+    # def store_option_experience(self, start_state, option, step_length, end_state, reward, mask):
+    #     self.memory_option.push(start_state, option, step_length, end_state, reward, mask)
 
     def update_action_target_networks(self):
         self.action_target_network.load_state_dict(self.action_network.state_dict())
        
-    def update_option_target_networks(self):
-        self.option_target_network.load_state_dict(self.option_network.state_dict())
+    # def update_option_target_networks(self):
+    #     self.option_target_network.load_state_dict(self.option_network.state_dict())
 
     # def select_action_ucb(self, state, option, c, steps_done):
     #     with torch.no_grad():
@@ -200,25 +216,25 @@ class AIAgent:
 
         return action
     
-    def option_eps_greedy(self, state, mask):
-        if random.random() < self.eps_action:
-            option = [random.random() for _ in range(self.option_dim)]
-            option = torch.tensor(option)
-            option *= mask
-            probs = torch.nn.functional.softmax(option, dim=0)
-            option_dist = torch.distributions.Categorical(probs)
-            option = torch.argmax(option_dist.probs)
-        else:
-            batched_state = state.expand(self.batch_size, -1, -1, -1)
-            probs = self.option_network(batched_state, mask)
-            probs = torch.nn.functional.softmax(probs, dim=1)
-            probs = probs[0]
-            option_dist = torch.distributions.Categorical(probs)
-            option = torch.argmax(option_dist.probs)
+    # def option_eps_greedy(self, state, mask):
+    #     if random.random() < self.eps_action:
+    #         option = [random.random() for _ in range(self.option_dim)]
+    #         option = torch.tensor(option)
+    #         option *= mask
+    #         probs = torch.nn.functional.softmax(option, dim=0)
+    #         option_dist = torch.distributions.Categorical(probs)
+    #         option = torch.argmax(option_dist.probs)
+    #     else:
+    #         batched_state = state.expand(self.batch_size, -1, -1, -1)
+    #         probs = self.option_network(batched_state, mask)
+    #         probs = torch.nn.functional.softmax(probs, dim=1)
+    #         probs = probs[0]
+    #         option_dist = torch.distributions.Categorical(probs)
+    #         option = torch.argmax(option_dist.probs)
 
-        if env.step_count % 10 == 0:
-            self.eps_option = self.eps_option*0.9
-        return option
+    #     if env.step_count % 10 == 0:
+    #         self.eps_option = self.eps_option*0.9
+    #     return option
     
     def check_key_door(self, state):
         '''
@@ -242,25 +258,25 @@ class AIAgent:
         
         return n_key, n_door_lock
     
-    def get_option_mask(self, n_key, n_door_lock):
-        mask = torch.ones(self.option_dim)
-        mask_value = 1e-16
-        if isinstance(self.env.carrying, Key) and n_door_lock > 0:
-            #open the door
-            mask[0] = mask_value
-            mask[2] = mask_value
+    # def get_option_mask(self, n_key, n_door_lock):
+    #     mask = torch.ones(self.option_dim)
+    #     mask_value = 1e-16
+    #     if isinstance(self.env.carrying, Key) and n_door_lock > 0:
+    #         #open the door
+    #         mask[0] = mask_value
+    #         mask[2] = mask_value
         
-        elif n_key > 0:
-            #get the key
-            mask[1] = mask_value
-            mask[2] = mask_value
+    #     elif n_key > 0:
+    #         #get the key
+    #         mask[1] = mask_value
+    #         mask[2] = mask_value
         
-        else:
-            #go to goal
-            mask[0] = mask_value
-            mask[1] = mask_value
+    #     else:
+    #         #go to goal
+    #         mask[0] = mask_value
+    #         mask[1] = mask_value
         
-        return mask
+    #     return mask
 
     def get_legal_action(self):
         legal_action= torch.ones(self.action_dim)
@@ -283,7 +299,7 @@ class AIAgent:
             legal_action[3] = mask_value
 
         #cannot drop
-        if not fwd_cell and self.env.carrying:
+        if isinstance(self.env.carrying, Key):
             pass
         else:
             legal_action[4] = mask_value
@@ -360,6 +376,7 @@ if __name__ == "__main__":
     while True:
         
         agent = AIAgent(env, state_channel, n_actions, n_options)
+        fixOptionPolicy = FixOption(agent)
         for i_episode in range(num_episodes):
             print(f'training epoch: {i_episode}')
             start_state = env.reset()
@@ -372,11 +389,11 @@ if __name__ == "__main__":
             option_done = False
             n_key, n_door_lock = agent.check_key_door(state)
 
-            mask = agent.get_option_mask(n_key, n_door_lock)
-            option = agent.option_eps_greedy(start_state, mask)
-            option_num = option.item()
+            # mask = agent.get_option_mask(n_key, n_door_lock)
+            # option = agent.option_eps_greedy(start_state, mask)
+            option_num = fixOptionPolicy.get_option(n_key, n_door_lock)
             print("option_num: ", option_num)
-            option = torch.tensor(option, dtype=torch.int64)
+            option = torch.tensor(option_num, dtype=torch.int64)
             option = F.one_hot(option, num_classes = n_options)
 
             while not done:
@@ -405,7 +422,7 @@ if __name__ == "__main__":
 
                     option_done = agent.check_option_done(option_num, n_door_lock, next_state, done)
                     loss_action, gradient_norm_action = agent.train_action()
-                    loss_option, gradient_norm_option = agent.train_option()
+                    # loss_option, gradient_norm_option = agent.train_option()
                     state = next_state
                     total_reward += reward
                     if step % TARGET_UPDATE == 0:
@@ -416,40 +433,41 @@ if __name__ == "__main__":
                         pass
                     else:
                         writer.add_scalar('action_loss', loss_action, agent.total_step)
-                    if loss_option is None:
-                        pass
-                    else:
-                        writer.add_scalar('action_option', loss_option, agent.total_step)
+                    # if loss_option is None:
+                    #     pass
+                    # else:
+                    #     writer.add_scalar('action_option', loss_option, agent.total_step)
                     if gradient_norm_action is None:
                         pass
                     else:
                         writer.add_scalar('gradient_norm_action', gradient_norm_action, agent.total_step)
-                    if gradient_norm_option is None:
-                        pass
-                    else:
-                        writer.add_scalar('gradient_norm_option', gradient_norm_option, agent.total_step)
+                    # if gradient_norm_option is None:
+                    #     pass
+                    # else:
+                    #     writer.add_scalar('gradient_norm_option', gradient_norm_option, agent.total_step)
 
                 print(f"option {option_num} done. Use step {step}.")
 
-                agent.store_option_experience(start_state, option_num, step, state, reward, mask)
+                # agent.store_option_experience(start_state, option_num, step, state, reward, mask)
 
                 print(f"-----------------option {option_num} done-----------------")
 
                 if not done and option_done:
                     n_key, n_door_lock = agent.check_key_door(state)
-                    mask = agent.get_option_mask(n_key, n_door_lock)
-                    option = agent.option_eps_greedy(state, mask)
+                    # mask = agent.get_option_mask(n_key, n_door_lock)
+                    # option = agent.option_eps_greedy(state, mask)
+                    option = fixOptionPolicy.get_option(n_key, n_door_lock)
                     option_num = option
                     print("option_num: ", option_num)
                     option = torch.tensor(option)
                     option = F.one_hot(option, num_classes = n_options)
                     option_done = False
             
-            if i_episode % TARGET_UPDATE == 0:
-                agent.update_option_target_networks()
+            # if i_episode % TARGET_UPDATE == 0:
+            #     agent.update_option_target_networks()
             
             print(f"Episode {i_episode}, Total Reward: {total_reward}")
 
-        torch.save(agent.option_network.state_dict(), 'option_model.pth')
+        # torch.save(agent.option_network.state_dict(), 'option_model.pth')
         torch.save(agent.action_network.state_dict(), 'action_model.pth')
         print('done')

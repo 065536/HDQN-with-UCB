@@ -1133,9 +1133,6 @@ class MiniGridEnv(gym.Env):
                     self.carrying.cur_pos = np.array([-1, -1])
                     self.grid.set(*fwd_pos, None)
 
-                    if fwd_cell == 5:
-                        reward += 1
-
         # Drop an object
         elif action == self.actions.drop:
             if not fwd_cell and self.carrying:
@@ -1147,7 +1144,6 @@ class MiniGridEnv(gym.Env):
         elif action == self.actions.toggle:
             if fwd_cell:
                 fwd_cell.toggle(self, fwd_pos)
-                reward += 1
 
         # Done action (not used by default)
         elif action == self.actions.done:

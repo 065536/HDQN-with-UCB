@@ -39,10 +39,10 @@ class OptionNet(nn.Module):
         x = x.permute(0, 3, 1, 2)
         x = F.relu(self.conv1(x))
         x = F.max_pool2d(x, 2)  # 使用2x2的池化核
-        x = x.view(-1, 16 * 3 * 3)  # 将特征张量展平
+        x = x.reshape(-1, 16 * 3 * 3)  # 将特征张量展平
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        x -= mask
+        x -= (1 - mask) * 1e8
         return x
 
 class ActionNet(nn.Module):
@@ -62,7 +62,7 @@ class ActionNet(nn.Module):
         x = torch.cat((x, extra_option), dim=1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        x -= mask
+        x -= (1 - mask) * 1e8
         return x
 
 class AIAgent:
@@ -125,15 +125,15 @@ class AIAgent:
             return None, None
         transitions = self.memory_option.sample(self.batch_size)
         batch = Transition_option(*zip(*transitions))
-        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=torch.bool)
-        non_final_next_states = torch.stack([s for s in batch.next_state if s is not None])
+        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.end_state)), dtype=torch.bool)
+        non_final_next_states = torch.stack([s for s in batch.end_state if s is not None])
         state_batch = torch.stack(batch.start_state)
         reward_batch = torch.tensor(batch.reward, dtype=torch.float32)
         mask = torch.stack(batch.mask)
 
         option_values = self.option_network(state_batch, mask)
         next_option_values = torch.zeros(self.batch_size)
-        next_option_values[non_final_mask] = self.option_target_network(non_final_next_states).max(1)[0].detach()
+        next_option_values[non_final_mask] = self.option_target_network(non_final_next_states, mask).max(1)[0].detach()
         expected_option_values = (next_option_values * self.gamma) + reward_batch
         loss = nn.MSELoss()(option_values, expected_option_values.unsqueeze(1))
         loss_option = loss
@@ -181,7 +181,7 @@ class AIAgent:
         if random.random() < self.eps_action:
             action = [random.random() for _ in range(self.action_dim)]
             action = torch.tensor(action)
-            action -= legal_action
+            action *= legal_action
             probs = torch.nn.functional.softmax(action, dim=0)
             action_dist = torch.distributions.Categorical(probs)
             action = torch.argmax(action_dist.probs)
@@ -204,7 +204,7 @@ class AIAgent:
         if random.random() < self.eps_action:
             option = [random.random() for _ in range(self.option_dim)]
             option = torch.tensor(option)
-            option -= mask
+            option *= mask
             probs = torch.nn.functional.softmax(option, dim=0)
             option_dist = torch.distributions.Categorical(probs)
             option = torch.argmax(option_dist.probs)
@@ -243,8 +243,8 @@ class AIAgent:
         return n_key, n_door_lock
     
     def get_option_mask(self, n_key, n_door_lock):
-        mask = torch.zeros(self.option_dim)
-        mask_value = 1e16
+        mask = torch.ones(self.option_dim)
+        mask_value = 1e-16
         if isinstance(self.env.carrying, Key) and n_door_lock > 0:
             #open the door
             mask[0] = mask_value
@@ -257,14 +257,14 @@ class AIAgent:
         
         else:
             #go to goal
+            mask[0] = mask_value
             mask[1] = mask_value
-            mask[2] = mask_value
         
         return mask
 
     def get_legal_action(self):
-        legal_action= torch.zeros(self.action_dim)
-        mask_value = 1e16
+        legal_action= torch.ones(self.action_dim)
+        mask_value = 1e-16
 
         legal_action[6] = mask_value
 
@@ -338,6 +338,7 @@ if __name__ == "__main__":
     Transition_option = namedtuple('TransitionOption', ('start_state', 'option', 'step_length', 'end_state', 'reward', 'mask'))
 
     env_name = "MiniGrid-DoorKey-8x8-v0"
+    # env_name = "MiniGrid-MultiRoom-N6-v0"
     env = gym.make(env_name)
     env = FullyObsWrapper(env)
     env.max_steps = 10000
@@ -357,13 +358,12 @@ if __name__ == "__main__":
     # 训练循环
     num_episodes = 1000
     while True:
-        # env.render('human')
         
+        agent = AIAgent(env, state_channel, n_actions, n_options)
         for i_episode in range(num_episodes):
             print(f'training epoch: {i_episode}')
             start_state = env.reset()
             start_state = torch.tensor(start_state, device=device, dtype = torch.float)
-            agent = AIAgent(env, state_channel, n_actions, n_options)
             state = start_state
             # action_counts = torch.ones(1, n_actions, device=device, dtype=torch.float)
             # option_counts = torch.ones(1, n_options, device=device, dtype=torch.float)
@@ -380,17 +380,26 @@ if __name__ == "__main__":
             option = F.one_hot(option, num_classes = n_options)
 
             while not done:
-                agent.total_step += 1
                 step = 0
                 while (not done) and (not option_done):
-                    # time.sleep(1)
+                    agent.total_step += 1
+                    env.render('human')
+                    time.sleep(0.01)
                     step += 1
                     n_key_now, n_door_lock = agent.check_key_door(state)
                     legal_action = agent.get_legal_action()
                     action = agent.action_eps_greedy(state, option, legal_action)
                     next_state, reward, done, _ = env.step(action)
-
-
+                    n_key_next, n_door_lock_next = agent.check_key_door(next_state)
+                    if n_door_lock_next > n_door_lock: # 关门给负奖励
+                        reward = -1.0
+                    if action == 5 and n_door_lock_next < n_door_lock: # 开门给正奖励
+                        reward = 1.0
+                    if n_key_next < n_key_now: # 拿到钥匙给奖励
+                        reward = 0.1
+                    elif n_key_next > n_key_now: # 丢掉钥匙给负奖励
+                        reward = -0.2
+                    
                     next_state = torch.tensor(next_state, device=device, dtype=torch.float)
                     agent.store_action_experience(state, option, action, next_state, reward, done, legal_action)
 

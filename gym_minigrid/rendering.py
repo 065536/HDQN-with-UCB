@@ -175,9 +175,11 @@ class Renderer:
         self.painter.setPen(pen)
 
     def drawLine(self, x0, y0, x1, y1):
+        x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
         self.painter.drawLine(x0, y0, x1, y1)
 
     def drawCircle(self, x, y, r):
+        x, y = int(x), int(y)
         center = QPoint(x, y)
         self.painter.drawEllipse(center, r, r)
 

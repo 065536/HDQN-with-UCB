@@ -232,7 +232,7 @@ class Door(WorldObj):
                 return True
             return False
 
-        self.is_open = not self.is_open
+        # self.is_open = not self.is_open
         return True
 
     def render(self, r):
@@ -1123,6 +1123,7 @@ class MiniGridEnv(gym.Env):
                 done = True
                 print("get goal!")
                 reward = self._reward()
+                reward += 1
             if fwd_cell != None and fwd_cell.type == 'lava':
                 done = True
 

@@ -97,7 +97,7 @@ class AIAgent:
         self.eps_option = eps_option
         self.env = env
         self.memory_action = ReplayMemory(capacity, Transition_action)
-        self.memory_option = ReplayMemory(capacity, Transition_option)
+        # self.memory_option = ReplayMemory(capacity, Transition_option)
         self.batch_size = batch_size
         self.action_counts = torch.ones(1, action_dim, dtype=torch.float)
         self.option_counts = torch.ones(1, option_dim, dtype=torch.float)
@@ -292,6 +292,7 @@ class AIAgent:
             pass
         else:
             legal_action[2] = mask_value
+            
         #cannot pick up
         if fwd_cell and fwd_cell.can_pickup() and (self.env.carrying is None):
             pass
@@ -300,12 +301,12 @@ class AIAgent:
 
         #cannot drop
         if isinstance(self.env.carrying, Key):
-            pass
-        else:
             legal_action[4] = mask_value
+        else:
+            pass
 
         #cannot activate
-        if fwd_cell:
+        if fwd_cell != None and (fwd_cell.type == "door") and (not fwd_cell.is_open):
             pass
         else:
             legal_action[5] = mask_value
@@ -351,7 +352,7 @@ if __name__ == "__main__":
 
     # 经验回放
     Transition_action = namedtuple('TransitionAction', ('state', 'option', 'action','next_state', 'reward', 'done', 'legal_action'))
-    Transition_option = namedtuple('TransitionOption', ('start_state', 'option', 'step_length', 'end_state', 'reward', 'mask'))
+    # Transition_option = namedtuple('TransitionOption', ('start_state', 'option', 'step_length', 'end_state', 'reward', 'mask'))
 
     env_name = "MiniGrid-DoorKey-8x8-v0"
     # env_name = "MiniGrid-MultiRoom-N6-v0"
@@ -415,8 +416,8 @@ if __name__ == "__main__":
                     if n_key_next < n_key_now: # 拿到钥匙给奖励
                         reward = 0.1
                     elif n_key_next > n_key_now: # 丢掉钥匙给负奖励
-                        reward = -0.2
-                    
+                        reward = -2
+                    reward -= 0.01
                     next_state = torch.tensor(next_state, device=device, dtype=torch.float)
                     agent.store_action_experience(state, option, action, next_state, reward, done, legal_action)
 

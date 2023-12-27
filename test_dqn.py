@@ -372,7 +372,7 @@ if __name__ == "__main__":
     n_states = env.observation_space.shape[0] 
     n_actions = env.action_space.n
     n_options = 3 # 例如：拿钥匙、开门、去终点
-    state_channel = 3
+    state_channel = 3 + 1
 
     # 训练循环
     num_episodes = 1000
@@ -383,9 +383,10 @@ if __name__ == "__main__":
         for i_episode in range(num_episodes):
             print(f'training epoch: {i_episode}')
             start_state = env.reset()
+            explored_state = torch.zeros((*start_state.shape[:2], 1), dtype=torch.float)
             current_loc = env.agent_pos
-            start_state = torch.tensor(start_state, device=device, dtype = torch.float)
-            state = start_state
+            state = torch.tensor(start_state, device=device, dtype = torch.float)
+            state = torch.cat((state, explored_state), dim=2)
             # action_counts = torch.ones(1, n_actions, device=device, dtype=torch.float)
             # option_counts = torch.ones(1, n_options, device=device, dtype=torch.float)
             total_reward = 0.0
@@ -411,26 +412,30 @@ if __name__ == "__main__":
                     legal_action = agent.get_legal_action()
                     action = agent.action_eps_greedy(state, option, legal_action)
                     next_state, reward, done, _ = env.step(action)
+                    next_state = torch.tensor(next_state, device=device, dtype=torch.float)
                     now_loc = env.agent_pos
                     if np.array_equal(now_loc, current_loc):
                         agent.same_location_count += 1
                     else:
                         current_loc = now_loc
                         agent.same_location_count = 0
+                    if explored_state[current_loc[0], current_loc[1]] == 0:
+                        explored_state[current_loc[0], current_loc[1]] = 1
+                        reward += 0.1
+                    next_state = torch.cat((next_state, explored_state), dim=2)
                     n_key_next, n_door_lock_next = agent.check_key_door(next_state)
                     if n_door_lock_next > n_door_lock: # 关门给负奖励
                         reward += -1.0
                     if action == 5 and n_door_lock_next < n_door_lock: # 开门给正奖励
                         reward += 1.0
                     if n_key_next < n_key_now: # 拿到钥匙给奖励
-                        reward += 0.1
+                        reward += 0.5
                     elif n_key_next > n_key_now: # 丢掉钥匙给负奖励
                         reward += -2
                     #原地打转给负奖励
-                    if agent.same_location_count >= 10:
-                        reward -=0.01 
-                    reward -= 0.005
-                    next_state = torch.tensor(next_state, device=device, dtype=torch.float)
+                    # if agent.same_location_count >= 10:
+                    #     reward -=0.01 
+                    # reward -= 0.005
                     agent.store_action_experience(state, option, action, next_state, reward, done, legal_action)
 
                     option_done = agent.check_option_done(option_num, n_door_lock, next_state, done)

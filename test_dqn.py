@@ -46,20 +46,22 @@ class ReplayMemory(object):
 #         return x
 
 class ActionNet(nn.Module):
-    def __init__(self, input_channels, output_dim, extra_option_dim):
+    def __init__(self, input_channels, output_dim, extra_option_dim, dir_dim = 4):
         super(ActionNet, self).__init__()
+        self.dir_dim = dir_dim
         self.conv1 = nn.Conv2d(input_channels, 16, 3)
-        self.fc1 = nn.Linear(16 * 3 * 3 + extra_option_dim, 64)
+        self.fc1 = nn.Linear(16 * 3 * 3 + extra_option_dim +self.dir_dim , 64)
         self.fc2 = nn.Linear(64, output_dim)
         self.extra_option_dim = extra_option_dim
+        
 
-    def forward(self, x, option, mask):
+    def forward(self, x, option, mask, dir):
         x = x.permute(0, 3, 1, 2)
         x = F.relu(self.conv1(x))
         x = F.max_pool2d(x, 2)
         x = x.reshape(-1, 16 * 3 * 3)
         extra_option = option.view(-1, self.extra_option_dim)
-        x = torch.cat((x, extra_option), dim=1)
+        x = torch.cat((x, extra_option, dir), dim=1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         x -= (1 - mask) * 1e8
@@ -118,10 +120,12 @@ class AIAgent:
         option_batch = batch.option
         option_batch = torch.stack(option_batch, dim=0)
         legal_action = torch.stack(batch.legal_action)
+        dir_batch = batch.dir
+        dir_batch = torch.stack(dir_batch)
 
-        state_action_values = self.action_network(state_batch, option_batch, legal_action).gather(1, action_batch.unsqueeze(1))
+        state_action_values = self.action_network(state_batch, option_batch, legal_action, dir_batch).gather(1, action_batch.unsqueeze(1))
         next_state_values = torch.zeros(self.batch_size)
-        next_state_values = self.action_target_network(non_final_next_states, option_batch, legal_action).max(1)[0].detach()
+        next_state_values = self.action_target_network(non_final_next_states, option_batch, legal_action, dir_batch).max(1)[0].detach()
         expected_state_action_values = (next_state_values * self.gamma) + reward_batch
         loss = nn.MSELoss()(state_action_values, expected_state_action_values.unsqueeze(1))
         loss_action = loss
@@ -168,8 +172,8 @@ class AIAgent:
     #     print("gradient_norm", gradient_norm)
     #     return loss_option, gradient_norm
 
-    def store_action_experience(self, state, option, action, next_state, reward, done, legal_action):
-        self.memory_action.push(state, option, action, next_state, reward, done, legal_action)
+    def store_action_experience(self, state, option, action, next_state, reward, done, legal_action, dir):
+        self.memory_action.push(state, option, action, next_state, reward, done, legal_action, dir)
 
     # def store_option_experience(self, start_state, option, step_length, end_state, reward, mask):
     #     self.memory_option.push(start_state, option, step_length, end_state, reward, mask)
@@ -194,7 +198,7 @@ class AIAgent:
     #         self.option_counts[0][option] += 1
     #         return ucb_values.max(1)[1].view(1, 1)
     
-    def action_eps_greedy(self, state, option, legal_action):
+    def action_eps_greedy(self, state, option, legal_action, dir):
         if random.random() < self.eps_action:
             action = [random.random() for _ in range(self.action_dim)]
             action = torch.tensor(action)
@@ -206,7 +210,8 @@ class AIAgent:
         else:
             batched_state = state.expand(self.batch_size, -1, -1, -1)
             batched_option = option.expand(self.batch_size, -1)
-            probs = self.action_network(batched_state, batched_option, legal_action)
+            batched_dir = dir.expand(self.batch_size, -1)
+            probs = self.action_network(batched_state, batched_option, legal_action, batched_dir)
             probs = torch.nn.functional.softmax(probs, dim=1)
             probs = probs[0]
             action_dist = torch.distributions.Categorical(probs)
@@ -353,7 +358,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 经验回放
-    Transition_action = namedtuple('TransitionAction', ('state', 'option', 'action','next_state', 'reward', 'done', 'legal_action'))
+    Transition_action = namedtuple('TransitionAction', ('state', 'option', 'action','next_state', 'reward', 'done', 'legal_action', 'dir'))
     # Transition_option = namedtuple('TransitionOption', ('start_state', 'option', 'step_length', 'end_state', 'reward', 'mask'))
 
     env_name = "MiniGrid-DoorKey-8x8-v0"
@@ -373,6 +378,7 @@ if __name__ == "__main__":
     n_actions = env.action_space.n
     n_options = 3 # 例如：拿钥匙、开门、去终点
     state_channel = 3
+    n_direction = 4
 
     # 训练循环
     num_episodes = 1000
@@ -409,7 +415,12 @@ if __name__ == "__main__":
                     step += 1
                     n_key_now, n_door_lock = agent.check_key_door(state)
                     legal_action = agent.get_legal_action()
-                    action = agent.action_eps_greedy(state, option, legal_action)
+                    dir = agent.env.agent_dir
+                    dir = torch.tensor(dir, dtype=torch.int64)
+                    dir = F.one_hot(dir, num_classes = n_direction)
+
+                    action = agent.action_eps_greedy(state, option, legal_action, dir)
+
                     next_state, reward, done, _ = env.step(action)
                     now_loc = env.agent_pos
                     if np.array_equal(now_loc, current_loc):
@@ -418,20 +429,19 @@ if __name__ == "__main__":
                         current_loc = now_loc
                         agent.same_location_count = 0
                     n_key_next, n_door_lock_next = agent.check_key_door(next_state)
-                    if n_door_lock_next > n_door_lock: # 关门给负奖励
-                        reward += -1.0
+
                     if action == 5 and n_door_lock_next < n_door_lock: # 开门给正奖励
-                        reward += 1.0
+                        reward += 0.5
+
                     if n_key_next < n_key_now: # 拿到钥匙给奖励
-                        reward += 0.1
-                    elif n_key_next > n_key_now: # 丢掉钥匙给负奖励
-                        reward += -2
+                        reward += 0.25
+
                     #原地打转给负奖励
                     if agent.same_location_count >= 10:
                         reward -=0.01 
                     reward -= 0.005
                     next_state = torch.tensor(next_state, device=device, dtype=torch.float)
-                    agent.store_action_experience(state, option, action, next_state, reward, done, legal_action)
+                    agent.store_action_experience(state, option, action, next_state, reward, done, legal_action, dir)
 
                     option_done = agent.check_option_done(option_num, n_door_lock, next_state, done)
                     loss_action, gradient_norm_action = agent.train_action()

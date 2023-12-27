@@ -103,6 +103,7 @@ class AIAgent:
         self.option_counts = torch.ones(1, option_dim, dtype=torch.float)
         self.action_set = [i for i in range(action_dim)]
         self.option_set = [i for i in range(option_dim)]
+        self.same_location_count = 0
 
     def train_action(self):
         if len(self.memory_action) < self.batch_size:
@@ -294,16 +295,17 @@ class AIAgent:
             legal_action[2] = mask_value
             
         #cannot pick up
-        if fwd_cell and fwd_cell.can_pickup() and (self.env.carrying is None):
+        if (fwd_cell != None) and (fwd_cell.type == 'key') and fwd_cell.can_pickup() and (self.env.carrying is None):
             pass
         else:
             legal_action[3] = mask_value
 
         #cannot drop
-        if isinstance(self.env.carrying, Key):
-            legal_action[4] = mask_value
-        else:
-            pass
+        legal_action[4] = mask_value
+        # if isinstance(self.env.carrying, Key) or (not self.env.carrying):
+        #     legal_action[4] = mask_value
+        # else:
+        #     pass
 
         #cannot activate
         if fwd_cell != None and (fwd_cell.type == "door") and (not fwd_cell.is_open):
@@ -381,6 +383,7 @@ if __name__ == "__main__":
         for i_episode in range(num_episodes):
             print(f'training epoch: {i_episode}')
             start_state = env.reset()
+            current_loc = env.agent_pos
             start_state = torch.tensor(start_state, device=device, dtype = torch.float)
             state = start_state
             # action_counts = torch.ones(1, n_actions, device=device, dtype=torch.float)
@@ -408,16 +411,25 @@ if __name__ == "__main__":
                     legal_action = agent.get_legal_action()
                     action = agent.action_eps_greedy(state, option, legal_action)
                     next_state, reward, done, _ = env.step(action)
+                    now_loc = env.agent_pos
+                    if np.array_equal(now_loc, current_loc):
+                        agent.same_location_count += 1
+                    else:
+                        current_loc = now_loc
+                        agent.same_location_count = 0
                     n_key_next, n_door_lock_next = agent.check_key_door(next_state)
                     if n_door_lock_next > n_door_lock: # 关门给负奖励
-                        reward = -1.0
+                        reward += -1.0
                     if action == 5 and n_door_lock_next < n_door_lock: # 开门给正奖励
-                        reward = 1.0
+                        reward += 1.0
                     if n_key_next < n_key_now: # 拿到钥匙给奖励
-                        reward = 0.1
+                        reward += 0.1
                     elif n_key_next > n_key_now: # 丢掉钥匙给负奖励
-                        reward = -2
-                    reward -= 0.01
+                        reward += -2
+                    #原地打转给负奖励
+                    if agent.same_location_count >= 10:
+                        reward -=0.01 
+                    reward -= 0.005
                     next_state = torch.tensor(next_state, device=device, dtype=torch.float)
                     agent.store_action_experience(state, option, action, next_state, reward, done, legal_action)
 
@@ -463,6 +475,8 @@ if __name__ == "__main__":
                     option = torch.tensor(option)
                     option = F.one_hot(option, num_classes = n_options)
                     option_done = False
+                    current_loc = env.agent_pos
+                    agent.same_location_count = 0
             
             # if i_episode % TARGET_UPDATE == 0:
             #     agent.update_option_target_networks()

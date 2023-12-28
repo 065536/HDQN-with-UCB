@@ -49,8 +49,10 @@ class ActionNet(nn.Module):
     def __init__(self, input_channels, output_dim, extra_option_dim, dir_dim = 4):
         super(ActionNet, self).__init__()
         self.dir_dim = dir_dim
-        self.conv1 = nn.Conv2d(input_channels, 16, 3)
-        self.fc1 = nn.Linear(16 * 3 * 3 + extra_option_dim +self.dir_dim , 64)
+        self.conv1 = nn.Conv2d(input_channels, 16, 2)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.conv3 = nn.Conv2d(32, 64, 7)
+        self.fc1 = nn.Linear(64 * 1 * 1 + extra_option_dim +self.dir_dim , 64)
         self.fc2 = nn.Linear(64, output_dim)
         self.extra_option_dim = extra_option_dim
         
@@ -58,8 +60,10 @@ class ActionNet(nn.Module):
     def forward(self, x, option, mask, dir):
         x = x.permute(0, 3, 1, 2)
         x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2)
-        x = x.reshape(-1, 16 * 3 * 3)
+        # x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.reshape(-1, 64 * 1 * 1)
         extra_option = option.view(-1, self.extra_option_dim)
         x = torch.cat((x, extra_option, dir), dim=1)
         x = F.relu(self.fc1(x))
@@ -84,7 +88,7 @@ class FixOption():
             return 2
 
 class AIAgent:
-    def __init__(self, env, state_channel, action_dim, option_dim, eps_action = 1, eps_option = 1, lr=0.001, gamma=0.99, capacity=10000, batch_size=32):
+    def __init__(self, env, state_channel, action_dim, option_dim, eps_action = 1, eps_option = 1, lr=0.0001, gamma=0.8, capacity=10000, batch_size=32):
         # self.option_network = OptionNet(state_channel, option_dim)
         # self.option_target_network = OptionNet(state_channel, option_dim)
         self.action_network = ActionNet(state_channel, action_dim, option_dim)
@@ -202,7 +206,7 @@ class AIAgent:
         if random.random() < self.eps_action:
             action = [random.random() for _ in range(self.action_dim)]
             action = torch.tensor(action)
-            action *= legal_action
+            action -= (1 - legal_action) * 1e8
             probs = torch.nn.functional.softmax(action, dim=0)
             action_dist = torch.distributions.Categorical(probs)
             action = action_dist.sample()
@@ -215,9 +219,12 @@ class AIAgent:
             probs = torch.nn.functional.softmax(probs, dim=1)
             probs = probs[0]
             action_dist = torch.distributions.Categorical(probs)
-            action = action_dist.sample()
+            if random.random() < 0.7:
+                action = action_dist.sample()
+            else:
+                action = torch.argmax(action_dist.probs)
 
-        if env.step_count % 10 == 0:
+        if env.step_count % 100 == 0:
             self.eps_action = self.eps_action * 0.99
 
         return action
@@ -336,6 +343,15 @@ class AIAgent:
                 option_done = True
         
         return option_done
+    
+def roll_and_pad(state, offset_x, offset_y):
+    return state
+    new_state = torch.roll(state, shifts=(3 - offset_x, 3 - offset_y), dims=(0, 1))
+    new_state[:max(0, 3 - offset_x), :, :] = 0
+    new_state[min(8, -offset_x + 11):, :, :] = 0
+    new_state[:, :max(0, 3 - offset_y), :] = 0
+    new_state[:, min(8, -offset_y + 11):, :] = 0
+    return new_state
         
 if __name__ == "__main__":
     # 设置随机种子以复现结果
@@ -393,6 +409,7 @@ if __name__ == "__main__":
             current_loc = env.agent_pos
             state = torch.tensor(start_state, device=device, dtype = torch.float)
             state = torch.cat((state, explored_state), dim=2)
+            state = roll_and_pad(state, current_loc[0], current_loc[1])
             # action_counts = torch.ones(1, n_actions, device=device, dtype=torch.float)
             # option_counts = torch.ones(1, n_options, device=device, dtype=torch.float)
             total_reward = 0.0
@@ -432,20 +449,21 @@ if __name__ == "__main__":
                         agent.same_location_count = 0
                     if explored_state[current_loc[0], current_loc[1]] == 0:
                         explored_state[current_loc[0], current_loc[1]] = 1
-                        reward += 0.1
+                        reward += 0.01
                     next_state = torch.cat((next_state, explored_state), dim=2)
+                    next_state = roll_and_pad(next_state, current_loc[0], current_loc[1])
                     n_key_next, n_door_lock_next = agent.check_key_door(next_state)
 
                     if action == 5 and n_door_lock_next < n_door_lock: # 开门给正奖励
-                        reward += 0.5
+                        reward += 1.0
 
                     if n_key_next < n_key_now: # 拿到钥匙给奖励
                         reward += 0.25
 
                     #原地打转给负奖励
-                    if agent.same_location_count >= 10:
-                        reward -=0.01 
-                    reward -= 0.005
+                    # if agent.same_location_count >= 10:
+                    #     reward -=0.01 
+                    # reward -= 0.005
                     
                     agent.store_action_experience(state, option, action, next_state, reward, done, legal_action, dir)
 

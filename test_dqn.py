@@ -51,8 +51,8 @@ class ActionNet(nn.Module):
         self.dir_dim = dir_dim
         self.conv1 = nn.Conv2d(input_channels, 16, 2)
         self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
-        self.conv3 = nn.Conv2d(32, 64, 7)
-        self.fc1 = nn.Linear(64 * 1 * 1 + extra_option_dim +self.dir_dim , 64)
+        self.conv3 = nn.Conv2d(32, 64, 3)
+        self.fc1 = nn.Linear(64 * 5 * 5 + extra_option_dim +self.dir_dim , 64)
         self.fc2 = nn.Linear(64, output_dim)
         self.extra_option_dim = extra_option_dim
         
@@ -63,7 +63,7 @@ class ActionNet(nn.Module):
         # x = F.max_pool2d(x, 2)
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
-        x = x.reshape(-1, 64 * 1 * 1)
+        x = x.reshape(-1, 64 * 5 * 5)
         extra_option = option.view(-1, self.extra_option_dim)
         x = torch.cat((x, extra_option, dir), dim=1)
         x = F.relu(self.fc1(x))
@@ -449,7 +449,7 @@ if __name__ == "__main__":
                         agent.same_location_count = 0
                     if explored_state[current_loc[0], current_loc[1]] == 0:
                         explored_state[current_loc[0], current_loc[1]] = 1
-                        reward += 0.01
+                        reward += 0.001
                     next_state = torch.cat((next_state, explored_state), dim=2)
                     next_state = roll_and_pad(next_state, current_loc[0], current_loc[1])
                     n_key_next, n_door_lock_next = agent.check_key_door(next_state)
